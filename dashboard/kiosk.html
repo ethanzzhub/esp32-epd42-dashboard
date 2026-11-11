@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<title>Panel</title>
+<style>
+  :root{
+    --bg:#07080a; --num:#e9eef6; --lab:#7b8798; --up:#d8392b; --down:#1a9d54;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:var(--bg)}
+  body{
+    color:var(--num);
+    font:400 16px/1.2 -apple-system,"PingFang SC","Helvetica Neue",system-ui,sans-serif;
+    user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #stage{position:fixed;inset:0;display:flex;flex-direction:column;
+         padding:calc(env(safe-area-inset-top) + 6px) 10px calc(env(safe-area-inset-bottom) + 8px)}
+  #top{position:relative;height:min(4.4vh,3.2vw);min-height:14px;flex:none}
+  .clock{position:absolute;left:2px;top:0;font-size:min(3.2vh,2.6vw);color:var(--lab);
+         font-variant-numeric:tabular-nums;letter-spacing:.06em}
+  .fresh{position:absolute;right:2px;top:15%;width:min(1.5vh,1.2vw);height:min(1.5vh,1.2vw);
+         min-width:5px;min-height:5px;border-radius:50%;background:var(--num);opacity:1;
+         transition:opacity .4s}
+
+  #grid{flex:1;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(4,1fr);
+        transition:transform 1.2s}
+  .cell{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:min(.8vh,.6vw);
+        border-bottom:1px solid #13171f;border-left:1px solid #13171f;overflow:hidden}
+  .cell:nth-child(3n+1){border-left:none}
+  .cell:nth-child(n+10){border-bottom:none}
+  .code{font-size:min(2.9vh,2.6vw);letter-spacing:.08em;color:var(--lab);white-space:nowrap}
+  .num{font-size:min(11vh,10.5vw);font-weight:400;line-height:1;
+       font-variant-numeric:tabular-nums;white-space:nowrap}
+  .num.box{border:2px solid currentColor;border-radius:.14em;padding:0 .16em}
+  body.night #stage{filter:brightness(.45)}
+  #off{position:fixed;inset:0;background:#000;display:none}
+  body.sleep #off{display:block}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="top"><div class="clock" id="clock">--:--:--</div><div class="fresh" id="fresh"></div></div>
+  <div id="grid"></div>
+</div>
+<div id="off"></div>
+
+<script>
+/* 隐蔽行情看板 —— 二手安卓手机 / 香橙派 kiosk 通用
+ * 用法：把这个文件拷到设备上用浏览器打开（file:// 也行），或直接挂进 Fully Kiosk。
+ * URL 参数（# 后面，逗号分隔无空格）：
+ *   mode=box|paren|dim|plain   跌的表示：加框/括号/灰度/什么都不做（默认 box）
+ *   col=neutral|red            配色：中性单色 / 涨红跌绿（默认 neutral）
+ *   api=0|1                    强制不用/用本地 /api/q（默认自动探测）
+ *   night=1                    23:00-07:00 自动压暗（默认关）
+ *   every=5                    刷新间隔秒（默认 5）
+ */
+const H = {};
+location.hash.slice(1).split(/[,&]/).forEach(p=>{const i=p.indexOf('=');
+  if(i>0) H[p.slice(0,i)] = decodeURIComponent(p.slice(i+1));});
+const mode = H.mode || 'box';
+const col  = H.col  || 'neutral';
+const night= H.night==='1';
+const every= Math.max(2, parseFloat(H.every||'5'))*1000;
+
+/* 12 个标的：4 行 × 3 列，按市场分区 */
+const ORDER = ["SSE","STAR","CHINEXT","HSTECH","N225","KS11","NDX","DJI","SPX","GOLD","OIL","SILVER"];
+const TX = [                                    // 腾讯：一次请求拿 10 个
+  ["sh000001","SSE"],["sh000680","STAR"],["sz399006","CHINEXT"],
+  ["hkHSTECH","HSTECH"],
+  ["usNDX","NDX"],["usDJI","DJI"],["usINX","SPX"],
+  ["hf_XAU","GOLD"],["hf_CL","OIL"],["hf_SI","SILVER"],
+];
+const EM_WANT = ["N225","KS11"];                // 东财全球指数批量接口里挑这两个
+const V = {};
+let TS = 0;
+
+const el = id => document.getElementById(id);
+const fmt = (n,d) => { const v = parseFloat(n); return isNaN(v) ? '--' : v.toFixed(d); };
+
+function colorOf(p){
+  if(col !== 'red') return 'var(--num)';
+  return p > 0 ? 'var(--up)' : p < 0 ? 'var(--down)' : 'var(--num)';
+}
+
+function render(){
+  el('grid').innerHTML = ORDER.map((tk,i)=>{
+    const v = V[tk];
+    const has = v && isFinite(v[0]);
+    const p = has ? v[0] : 0;
+    const down = has && p < 0;
+    let c = has ? colorOf(p) : 'var(--lab)';
+    if(mode === 'dim' && has) c = down ? 'var(--lab)' : 'var(--num)';
+    let t = has ? fmt(Math.abs(p), 2) : '--';
+    if(mode === 'paren' && down) t = '(' + t + ')';
+    const cls = 'num' + (mode === 'box' && down ? ' box' : '');
+    return '<div class="cell"><div class="code">'+tk+'</div>'
+         + '<div class="'+cls+'" style="color:'+c+'">'+t+'</div></div>';
+  }).join('');
+
+  const stale = !TS || Date.now()-TS > 20000;
+  el('fresh').style.opacity = stale ? .22 : 1;
+  el('clock').textContent = TS
+    ? new Date(TS).toLocaleTimeString('zh-CN',{hour12:false}) : '--:--:--';
+  if(night){ const h = new Date().getHours(); document.body.classList.toggle('night', h>=23 || h<7); }
+  applyDrift();
+}
+
+/* 防老化：内容整体缓慢漂移几像素，长期静止画面不留残影 */
+function applyDrift(){
+  const k = Math.floor(Date.now()/600000) % 4;
+  const d = [[0,0],[2,1],[-2,-1],[1,-2]][k];
+  el('grid').style.transform = 'translate('+d[0]+'px,'+d[1]+'px)';
+}
+
+/* ---------- 取数一：本机 /api/q（server.py 在跑的时候） ---------- */
+let apiOK = location.protocol !== 'file:';
+let apiFail = 0;
+async function loadAPI(){
+  if(!apiOK || (H.api === '0')) return false;
+  try{
+    const r = await fetch('/api/q?_=' + Date.now(), {cache:'no-store'});
+    if(!r.ok) throw 0;
+    const j = await r.json();
+    const q = j.q || {};
+    let got = 0;
+    Object.keys(q).forEach(tk=>{
+      if(ORDER.indexOf(tk) < 0) return;
+      V[tk] = [parseFloat(q[tk][0]), parseFloat(q[tk][1])];
+      got++;
+    });
+    if(got >= 10){ TS = (j.t||Math.floor(Date.now()/1000))*1000; return true; }
+  }catch(e){
+    if(++apiFail >= 2) apiOK = false;
+  }
+  return false;
+}
+
+/* ---------- 取数二：直连腾讯 + 东财（JSONP，file:// 也能用） ---------- */
+function loadTX(){
+  const s = document.createElement('script');
+  s.src = 'https://qt.gtimg.cn/q=' + TX.map(t=>t[0]).join(',') + '&_=' + Date.now();
+  s.onload = ()=>{
+    TX.forEach(t=>{
+      const raw = window['v_' + t[0]];
+      if(!raw) return;
+      const f = String(raw).indexOf('~') >= 0
+        ? [parseFloat(String(raw).split('~')[3]), parseFloat(String(raw).split('~')[32])]
+        : [parseFloat(String(raw).split(',')[0]), parseFloat(String(raw).split(',')[1])];
+      if(isFinite(f[1])) V[t[1]] = [f[1], f[0]];
+    });
+    TS = Date.now(); render();
+  };
+  document.body.appendChild(s);
+  setTimeout(()=>s.remove(), 8000);
+}
+let seq = 0;
+
+/* 日经/韩股：腾讯没有这两个代码。新浪用 <script> 直接注入全局变量
+   （var hq_str_znb_NKY="日经225,点位,涨跌额,涨跌幅%,..."），无需 JSONP 回调。
+   字段顺序：名称, 现价, 涨跌额, 涨跌幅%, 时间, 时间戳, 日期 */
+function loadSN(done){
+  const map = { znb_NKY: 'N225', znb_KOSPI: 'KS11' };
+  const s = document.createElement('script');
+  s.charset = 'gbk';
+  let got = 0, finished = false;
+  const fin = () => {
+    if(finished) return;
+    got++;
+    if(got < 2) return;                       // 等 8 秒 或 onerror 先到
+    finished = true;
+    try{ s.remove(); }catch(e){}
+    if(Object.keys(map).some(c => window['hq_str_' + c])) done(true); else done(false);
+  };
+  s.onload = () => {
+    Object.keys(map).forEach(c => {
+      const raw = window['hq_str_' + c];
+      if(!raw) return;
+      const f = String(raw).split(',');
+      if(f.length < 4 || !f[1]) return;
+      const pct = parseFloat(f[3]), px = parseFloat(f[1]);
+      if(isFinite(pct)) V[map[c]] = [pct, px];
+    });
+    TS = Date.now(); render();
+    fin();
+  };
+  s.onerror = () => fin();
+  s.src = 'https://hq.sinajs.cn/list=' + Object.keys(map).join(',') + '&_=' + Date.now();
+  document.body.appendChild(s);
+  setTimeout(fin, 8000);
+}
+
+/* 兜底：东财全球指数批量（JSONP）。该接口按 IP 限流，别指望它稳定 */
+function loadEM(){
+  const cb = 'emk' + (++seq);
+  window[cb] = d => {
+    try{
+      ((d && d.data && d.data.diff) || []).forEach(it=>{
+        if(EM_WANT.indexOf(it.f12) < 0) return;
+        const p = parseFloat(it.f3);
+        if(isFinite(p)) V[it.f12] = [p, parseFloat(it.f2)];
+      });
+      render();
+    }catch(e){}
+    setTimeout(()=>{ try{ delete window[cb]; }catch(e){} }, 1000);
+  };
+  const s = document.createElement('script');
+  s.src = 'https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=100&po=1&np=1'
+        + '&fltt=2&fs=m:100&fields=f2,f3,f12&cb=' + cb + '&_=' + Date.now();
+  document.body.appendChild(s);
+  setTimeout(()=>s.remove(), 8000);
+}
+
+async function tick(){
+  if(!(await loadAPI())){
+    loadTX();
+    loadSN(ok => { if(!ok) loadEM(); });      // 新浪优先，拿不到再试东财
+  }
+  render();
+}
+
+/* 保活：HTTPS 下浏览器才给 Wake Lock；file:// 或 http:// 需要靠
+   Fully Kiosk 的 Keep Screen On 或开发者选项「充电时不休眠」 */
+async function keepAwake(){
+  try{ if(navigator.wakeLock) await navigator.wakeLock.request('screen'); }catch(e){}
+  document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') keepAwake(); });
+}
+
+render(); tick(); keepAwake();
+setInterval(tick, every);
+setInterval(render, 1000);
+addEventListener('error', e => e.stopImmediatePropagation(), true);
+</script>
+</body>
+</html>

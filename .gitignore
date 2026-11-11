@@ -1,0 +1,12 @@
+# 个人 agent 数据（含记忆，勿入公开仓库）
+.workbuddy/
+
+# 系统文件
+.DS_Store
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 本地临时日志
+*.log

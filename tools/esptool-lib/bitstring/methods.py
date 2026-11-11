@@ -1,0 +1,147 @@
+from __future__ import annotations
+
+import functools
+import bitstring
+from bitstring.bits import Bits
+from bitstring.utils import tokenparser
+from bitstring.helpers import validated_count
+import bitstring.bitstore_helpers as helpers
+
+ConstBitStore = bitstring.bitstore.ConstBitStore
+
+# Sentinel for "the values are used up", avoiding a raised StopIteration per pack().
+_NO_MORE_VALUES = object()
+
+
+@functools.lru_cache(256)
+def _prepared_pack_fmt(fmt: str):
+    """A single core dtype covering a whole format string, and how many values it takes.
+
+    None unless every token is a plain fixed-length dtype that takes one value, which
+    rules out literals, named values, pad and stretchy tokens.
+    """
+    try:
+        _, tokens = tokenparser(fmt, ())
+    except ValueError:
+        return None
+    specs = []
+    for name, length, value in tokens:
+        if value is not None or length is None:
+            return None
+        try:
+            dtype = bitstring.Dtype(name, int(length))
+        except ValueError:
+            return None
+        if dtype._bitlength is None:
+            return None
+        specs.append((dtype._name, dtype._bitlength))
+    if not specs:
+        return None
+    dtype_tuple = bitstring.bitstore.tibs_dtype_tuple_for(tuple(specs))
+    if dtype_tuple is None:
+        return None
+    return dtype_tuple, len(specs)
+
+
+def _values_needed_str(tokens: list, kwargs: dict) -> str:
+    """How many positional values the tokens take, for the error messages.
+
+    Literals, named values, pad and names given in kwargs don't take one.
+    """
+    n = 0
+    for name, length, value in tokens:
+        if value is not None or name == 'pad':
+            continue
+        if name in kwargs and kwargs.get(length, length) is None:
+            continue
+        n += 1
+    return "1 value is" if n == 1 else f"{n} values are"
+
+
+def pack(fmt: str | bitstring.Dtype | list[str | bitstring.Dtype], *values, **kwargs) -> Bits:
+    """Pack the values according to the format string and return a new Bits object.
+
+    fmt -- A single string or Dtype, or a list of them, with comma separated tokens
+           describing how to create the Bits.
+    values -- Zero or more values to pack according to the format.
+    kwargs -- A dictionary or keyword-value pairs - the keywords used in the
+              format string will be replaced with their given value.
+
+    Token examples: 'i:12'      : 12 bits as a signed integer
+                    'u:8'       : 8 bits as an unsigned integer
+                    'f:64'      : 8 bytes as a big-endian float
+                    'ibe:16'   : 2 bytes as a big-endian signed integer
+                    'ube:16'   : 2 bytes as a big-endian unsigned integer
+                    'ile:32'   : 4 bytes as a little-endian signed integer
+                    'ule:32'   : 4 bytes as a little-endian unsigned integer
+                    'fle:64'   : 8 bytes as a little-endian float
+                    'hex:80'    : 80 bits as a hex string
+                    'oct:9'     : 9 bits as an octal string
+                    'bin:1'     : single bit binary string
+                    'ue' / 'uie': next bits as unsigned exp-Golomb code
+                    'se' / 'sie': next bits as signed exp-Golomb code
+                    'bits:5'    : 5 bits as a bitstring object
+                    'bytes:10'  : 10 bytes as a bytes object
+                    'bool'      : 1 bit as a bool
+                    'pad:3'     : 3 zero bits as padding
+
+    >>> s = pack('u:12, bits', 100, '0xffe')
+    >>> t = pack(['bits', 'bin:3'], s, '111')
+    >>> u = pack('u:8=a, u:8=b, u:55=a', a=6, b=44)
+
+    """
+    if type(fmt) is str and not kwargs:
+        prepared = _prepared_pack_fmt(fmt)
+        if prepared is not None:
+            dtype_tuple, value_count = prepared
+            if len(values) == value_count:
+                try:
+                    packed = ConstBitStore.from_value(dtype_tuple, values)
+                except Exception:
+                    pass  # Fall through, so the general path reports the error.
+                else:
+                    s = object.__new__(Bits)
+                    s._bitstore = packed
+                    return s
+
+    tokens = []
+    if isinstance(fmt, (str, bitstring.Dtype)):
+        fmt = [fmt]
+    kwarg_names = tuple(sorted(kwargs.keys())) if kwargs else ()
+    for f_item in fmt:
+        # A Dtype is accepted wherever its string form is, as it is by unpack().
+        _, tkns = tokenparser(str(f_item) if isinstance(f_item, bitstring.Dtype) else f_item, kwarg_names)
+        tokens.extend(tkns)
+    value_iter = iter(values)
+    bsl: list[ConstBitStore] = []
+    try:
+        for name, length, value in tokens:
+            if kwargs:
+                # If the value is in the kwd dictionary then it takes precedence.
+                value = kwargs.get(value, value)
+                # If the length is in the kwd dictionary then use that too.
+                length = kwargs.get(length, length)
+                # Also if we just have a dictionary name then we want to use it
+                if name in kwargs and length is None and value is None:
+                    bsl.append(Bits(kwargs[name])._bitstore)
+                    continue
+            if length is not None and type(length) is not int:
+                # Only a length from kwargs can get here, and int() would truncate a float.
+                length = validated_count(length, "length")
+            if value is None and name != 'pad':
+                # Take the next value from the ones provided
+                value = next(value_iter)
+            bsl.append(helpers.bitstore_from_token(name, length, value))
+    except StopIteration:
+        raise ValueError(f"Not enough parameters present to pack according to the "
+                         f"format. {_values_needed_str(tokens, kwargs)} needed.")
+
+    if next(value_iter, _NO_MORE_VALUES) is not _NO_MORE_VALUES:
+        raise ValueError(f"Too many parameters present to pack according to the format. "
+                         f"Only {_values_needed_str(tokens, kwargs)} expected.")
+    # Good, we've used up all the *values.
+    s = object.__new__(Bits)
+    # A single token is the common case and doesn't need joining. The stores are
+    # immutable, so sharing one with whatever produced it is safe.
+    s._bitstore = bsl[0] if len(bsl) == 1 else ConstBitStore.join(bsl)
+    return s
