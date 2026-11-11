@@ -43,7 +43,7 @@ def market_show_data(tk, t):
 
 def draw_panel(sim_min, wd=1):
     t = (0, 0, 0, sim_min // 60, sim_min % 60, 0, wd, 0)
-    S = P.Stub({"city_label": "HAIDIAN", "quote_sec": 120, "weather_sec": 1800})
+    S = P.Stub({"quote_sec": 120})
     S.now = "%02d:%02d" % (sim_min // 60, sim_min % 60)
     fb = S.fb
     fb.fill(P.WHITE)

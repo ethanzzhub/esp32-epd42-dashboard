@@ -1,8 +1,8 @@
-# 4.2" 墨水屏行情/天气面板（400x300，SSD1619A，黑白）
+# 4.2" 墨水屏行情面板（400x300，SSD1619A，黑白）
 #
 # 屏：400x300 单色。刷新有两条路（2026-11-03 实测）：全刷 0xF7 整屏 3s 翻转；
 #      差分 0xCF + 70 字节 LUT + 0x26 旧帧，只驱动变化像素、不闪，约 1s。
-# 页：0=行情 12 格（3 列 x 4 行）  1=天气
+# 页：行情 12 格（3 列 x 4 行）
 # 切换：定时自动翻页 / 按键（GPIO，按下翻页）/ 网页控制台（/page?i=1）
 #
 # 刷新策略（墨水屏专用，和 TFT 版最大的区别）：
@@ -40,12 +40,6 @@ DEFAULT = {
     "page_sec": 60,           # 手动翻页后的停留秒数（到点自动回当前时段该显示的页）
     "quote_sec": 120,         # 行情刷新间隔（秒，盘中 09:00-15:30）。走差分，约 1s 不闪
     "quote_sec_off": 600,     # 非盘中（早晚时段）的行情刷新间隔（秒）。宁慢勿闪
-    "weather_sec": 1800,      # 天气刷新间隔（秒）
-    # 天气页只在指定时段自动展示，其余时间屏上只有行情页。
-    # 手动（按键 / 网页）随时能翻过去看一眼，page_sec 秒后自动回行情。
-    "wx_from": "18:00",       # 天气页起（HH:MM，左闭）
-    "wx_to": "18:30",         # 天气页止（HH:MM，右开）
-    "wx_weekday": True,       # 只在工作日展示天气页
     # 本屏支持差分刷新（2026-11-03 实测）：数字变化走差分（不闪），
     # 每 diff_full_every 次刷新做一次全刷清残影（1=每次全刷=关差分）。
     # full_every 是更早的废弃键，恒为 1，留着只为兼容旧配置文件。
@@ -55,11 +49,6 @@ DEFAULT = {
     "active_from": 7,         # 工作时段起始小时（含）。时段外不取数不刷屏
     "active_to": 20,          # 工作时段结束小时（不含）。20 = 晚上 8 点后静默
     "weekend_off": True,     # 周六周日全天静默
-    "city": "101010200",      # 城市代码（北京海淀）。中文名接口已失效，必须用代码
-    "city_label": "HAIDIAN",  # 屏上显示的城市代号（屏无中文字库，只能拉丁字符）
-    # 经纬度：只给未来 2 小时降水用（Open-Meteo 按坐标取数）。换城市要同步改这两项
-    "lat": 39.96,
-    "lon": 116.30,
     "quote_url": "",          # 家里聚合服务（可选）；留空=板子直连公网
     "led": 48,                # 板载 WS2812 状态灯 GPIO（官方引脚图：GPIO48=RGB LED）；-1 = 关闭
     "led_bright": 24,         # 待机亮度（0-255），越大越亮
@@ -366,35 +355,6 @@ def _hm(s, dflt):
     except Exception:
         pass
     return dflt
-
-
-def wx_span():
-    """天气页展示窗口（当日分钟数，左闭右开）。止<=起 视为关闭。"""
-    a = _hm(cfg.get("wx_from"), 18 * 60)
-    b = _hm(cfg.get("wx_to"), 18 * 60 + 30)
-    return (a, b) if b > a else (0, 0)
-
-
-def wx_ok(t=None):
-    """现在该不该自动展示天气页：工作日（可选）+ 落在窗口内"""
-    t = t or now_local()
-    if cfg.get("wx_weekday", True) and t[6] >= 5:
-        return False
-    a, b = wx_span()
-    if b <= a:
-        return False
-    return a <= t[3] * 60 + t[4] < b
-
-
-def wx_str():
-    """网页状态行用：天气页窗口 + 当前是否在窗口内"""
-    a, b = wx_span()
-    if b <= a:
-        return "天气页 已关闭"
-    s = "天气页 %02d:%02d-%02d:%02d%s" % (
-        a // 60, a % 60, b // 60, b % 60,
-        "（仅工作日）" if cfg.get("wx_weekday", True) else "")
-    return s + ("·展示中" if wx_ok() else "·未到时段")
 
 
 def mode_str():
@@ -761,109 +721,6 @@ def market():
     return {"zt": zt, "dt": dt}
 
 
-# ---------------- 天气（中文字段 -> 拉丁代号，屏上无中文字库） ----------------
-WX = (("雷阵雨", "T-STORM"), ("雨夹雪", "SLEET"), ("沙尘", "DUST"), ("扬沙", "DUST"),
-      ("暴雨", "STORM"), ("大雪", "SNOW"), ("中雪", "SNOW"), ("小雪", "SNOW"),
-      ("大雨", "RAIN"), ("中雨", "RAIN"), ("小雨", "RAIN"), ("阴", "OVERCAST"),
-      ("多云", "CLOUDY"), ("晴", "CLEAR"), ("雾", "FOG"), ("霾", "HAZE"))
-
-
-def wx_en(s):
-    s = s or ""
-    for zh, en in WX:
-        if zh in s:
-            return en
-    return "N/A"
-
-
-# 风向：长的先匹配（"东北风" 不能被 "北" 抢走）。屏上宽度紧，统一缩成 2 字母
-FX = (("东北", "NE"), ("东南", "SE"), ("西北", "NW"), ("西南", "SW"),
-      ("北", "N"), ("东", "E"), ("南", "S"), ("西", "W"))
-WK = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
-
-
-def fx_en(s):
-    """'西北风' -> 'NW'；'无持续风向' -> '-'"""
-    s = s or ""
-    for zh, en in FX:
-        if zh in s:
-            return en
-    return "-"
-
-
-def fl_num(s):
-    """'1级' -> '1'；'3-4级' -> '3-4'"""
-    out = ""
-    for ch in (s or ""):
-        if ch.isdigit() or ch == "-":
-            out += ch
-    return out or "-"
-
-
-def wk_en(s):
-    """'星期六' -> 'SAT'"""
-    s = s or ""
-    if "天" in s or "日" in s:
-        return "SUN"
-    i = "一二三四五六".find(s[-1:] if s else "")
-    return WK[i] if i >= 0 else "--"
-
-
-def aqi_en(s):
-    """空气质量中文 -> 屏上拉丁代号（'良' -> 'FAIR'）。长的先匹配"""
-    s = s or ""
-    for zh, en in (("严重", "SEVERE"), ("重度", "HEAVY"), ("中度", "MODERATE"),
-                   ("轻度", "LIGHT"), ("良", "FAIR"), ("优", "GOOD")):
-        if zh in s:
-            return en
-    return "-"
-
-
-def digits(s):
-    """'高温 16℃' -> '16'"""
-    out = ""
-    for ch in (s or ""):
-        if ch.isdigit():
-            out += ch
-    return out or "--"
-
-
-def weather():
-    # 这个接口返回 ~10KB，默认 4096 会截断导致 JSON 解析失败
-    j = fetch_json("http://t.weather.itboy.net/api/weather/city/%s" % cfg["city"],
-                   8, 16384)
-    if not j or "data" not in j:
-        return None
-    d = j["data"]
-    fc = d.get("forecast") or [{}]
-    f = fc[0]
-    f1 = fc[1] if len(fc) > 1 else {}
-    out = {
-        "temp": d.get("wendu", "--"),
-        "rh": d.get("shidu", "--"),
-        "pm25": d.get("pm25"),
-        "aqi": f.get("aqi", "--"),
-        "quality": aqi_en(d.get("quality", "")),
-        "type": wx_en(f.get("type", "")),
-        "low": digits(f.get("low", "")),
-        "high": digits(f.get("high", "")),
-        "fx": fx_en(f.get("fx", "")),          # 风向 NW
-        "fl": fl_num(f.get("fl", "")),         # 风力 1
-        "sunrise": f.get("sunrise", "--"),
-        "sunset": f.get("sunset", "--"),
-        # 明天概要
-        "t1": {
-            "type": wx_en(f1.get("type", "")),
-            "low": digits(f1.get("low", "")),
-            "high": digits(f1.get("high", "")),
-            "fx": fx_en(f1.get("fx", "")),
-            "fl": fl_num(f1.get("fl", "")),
-            "wk": wk_en(f1.get("week", "")),
-        },
-    }
-    return out
-
-
 # ---------------- 页 ----------------
 GRID_Y0, ROW_H = 28, 66
 COL_X, CELL_W = (0, 133, 266), 133
@@ -1054,66 +911,7 @@ class QuotePage(Page):
             hline(GRID_Y0 + r * ROW_H)
 
 
-class WeatherPage(Page):
-    name = "weather"
 
-    def __init__(self):
-        Page.__init__(self)
-        self.sync_cfg()
-
-    def sync_cfg(self):
-        self.ttl = cfg["weather_sec"]
-
-    def auto(self):
-        """只在 wx_from..wx_to 窗口内（默认工作日 18:00-18:30）参与自动展示"""
-        return wx_ok()
-
-    def pull(self):
-        return weather()
-
-    def draw(self):
-        draw_weather(self.data, self.ts, self.poll_at)
-
-
-# >>> WEATHER_LAYOUT (本区块只依赖 text/center/text_w/hline/fill_rect；
-#     tools/preview_weather.py 会原样抽出这段在电脑上渲染预览，改版式先预览再上板)
-def draw_weather(d, ts=0, poll=None):
-    """天气页版式 v5（去掉降水柱状图，极简左轴单栏）：
-       0-24   顶栏：时间 / 城市 / 新鲜度
-       40-96  今日：大字温度 + 天气 + 高低温 + 风
-       120    今日/明天分隔线（全页唯一中段线）
-       146-178 明天概要
-       216-246 湿度 / 空气质量 / 日出日落"""
-    fb.fill(WHITE)
-    bar(poll or ts)                        # 天气页顶栏只显示上次取数时间
-    if cfg["city_label"]:
-        center(cfg["city_label"], 4, 2, w=376)
-    if not d:
-        center("NO DATA", 130, 3)
-        return
-
-    # ---- 今日 ----
-    t = str(d.get("temp", "--")).split(".")[0]
-    text(t, 12, 40, 6)                   # 大字温度，基线 y=88
-    text("C", 112, 64, 3)                # 单位，与大字基线(88)对齐，不再悬浮
-    text(d.get("type", "N/A"), 140, 52, 3)   # 天气类型贴大字右侧、垂直居中
-    text("%s  %s" % (d.get("high", "--") + "/" + d.get("low", "--"),
-                     d.get("fx", "-") + " " + d.get("fl", "-")), 12, 96, 3)
-
-    hline(120)                           # 今日 / 明天 分隔
-
-    # ---- 明天 ----
-    t1 = d.get("t1") or {}
-    text("TMR " + t1.get("type", "N/A") + " " + t1.get("high", "--") + "/" + t1.get("low", "--"),
-         12, 146, 3)
-    text("%s  %s" % (t1.get("fx", "-") + " " + t1.get("fl", "-"), t1.get("wk", "--")),
-         12, 178, 2)
-
-    # ---- 湿度 / 空气 / 日照 ----
-    text("RH %s" % d.get("rh", "--"), 12, 216, 2)
-    text("AQI %s %s" % (d.get("aqi", "--"), d.get("quality", "--")), 128, 216, 2)
-    text("SUN %s-%s" % (d.get("sunrise", "--"), d.get("sunset", "--")), 12, 246, 2)
-# <<< WEATHER_LAYOUT
 
 
 def bar(clock):
@@ -1123,7 +921,7 @@ def bar(clock):
     hline(24)
 
 
-PAGES = [QuotePage(), WeatherPage()]
+PAGES = [QuotePage()]
 
 
 def page_dots(i):
@@ -1348,11 +1146,10 @@ input[type=checkbox]{width:auto;margin-top:9px}
 @media(max-width:440px){.grid,.grid.g2{grid-template-columns:1fr}}
 </style>
 <div class=wrap>
-<header><h1>墨水屏面板</h1><div id=st>页 {page} &middot; 刷屏 {time} &middot; 数据 {dtime} &middot; 档 {rate} &middot; {mode} &middot; {wx}</div></header>
+<header><h1>墨水屏面板</h1><div id=st>页 {page} &middot; 刷屏 {time} &middot; 数据 {dtime} &middot; 档 {rate} &middot; {mode}</div></header>
 <div class=cols>
 <div class=card><h2>操作</h2>
 <button class="b f" onclick=g('page=0')>行情页</button>
-<button class="b f" onclick=g('page=1')>天气页</button>
 <button class="b s" onclick=g('next=1')>下一页</button>
 <button class="b s" onclick=g('refresh=1')>立即刷新</button>
 <button class="b s" onclick="fetch('/cmd?led=offline').then(()=>{document.getElementById('st').textContent='灯自检：红色呼吸 30 秒'})">灯自检（红呼吸）</button>
@@ -1370,14 +1167,9 @@ const G=[
 ["刷新节奏","数字变化走差分（约 1s 不闪）；全刷只剩换页和下面这个节奏的清理",[
  ["quote_sec","盘中刷新间隔（秒）","num","09:00-15:30 用这个；不低于 60"],
  ["quote_sec_off","非盘中间隔（秒）","num","早晚时段用这个；不低于 180，宁慢勿闪"],
- ["diff_full_every","每几次刷新全刷一次","num","清残影用：1=每次全刷，8=默认，上限 500"],
- ["weather_sec","天气刷新间隔（秒）","num",""]]],
-["翻页与天气页","天气页只在这个时段自动出现，其余时间屏上只有行情",[
- ["page_sec","手动翻页后停留（秒）","num","到点自动回当前时段该显示的页"],
- ["wx_from","天气页起（HH:MM）","txt","工作日这个时段自动切到天气页"],
- ["wx_to","天气页止（HH:MM）","txt","右开区间；止不晚于起 = 关闭天气页"],
- ["wx_weekday","仅工作日展示天气页","chk",""]]],
+ ["diff_full_every","每几次刷新全刷一次","num","清残影用：1=每次全刷，8=默认，上限 500"]]],
 ["静默时段","时段外不取数不刷屏，但网页控制台和按键照常可用",[
+ ["page_sec","手动翻页后停留（秒）","num","到点自动回当前时段该显示的页"],
  ["active_from","起（时）","num","含本小时"],
  ["active_to","止（时）","num","不含本小时，20 = 晚 8 点后静默"],
  ["weekend_off","周末全天静默","chk",""]]],
@@ -1385,11 +1177,6 @@ const G=[
  ["mode","跌的表示","sel","box=加框 paren=括号 inv=反白 plain=无"],
  ["tz","时区（小时）","num",""],
  ["led_bright","状态灯亮度（0-255）","num","0=全灭；在线蓝 / 离线红呼吸 / 绿闪刷屏 / 橙闪取数失败"]]],
-["天气位置","换城市这三项要一起改",[
- ["city","天气城市代码","txt","如 101010200=北京海淀"],
- ["city_label","屏显城市代号","txt","屏无中文字库，仅拉丁字符"],
- ["lat","纬度","txt","未来 2 小时降水用"],
- ["lon","经度","txt","北京海淀 39.96 / 116.30"]]],
 ["高级","",[
  ["quote_url","聚合服务地址","txt","留空=板子直连公网"]]]
 ];
@@ -1450,9 +1237,9 @@ def _force_pull():
 
 
 # ---------- 配置表单 ----------
-_CFG_NUM = ("quote_sec", "quote_sec_off", "diff_full_every", "weather_sec", "page_sec",
+_CFG_NUM = ("quote_sec", "quote_sec_off", "diff_full_every", "page_sec",
             "active_from", "active_to", "tz", "led_bright")
-_CFG_TXT = ("mode", "city", "city_label", "quote_url", "wx_from", "wx_to")
+_CFG_TXT = ("mode", "quote_url")
 _CFG_MODES = ("box", "paren", "inv", "plain")
 
 
@@ -1489,14 +1276,7 @@ def _apply_cfg_form(body):
     for k in _CFG_TXT:
         if k in got:
             cfg[k] = got[k]
-    for k in ("lat", "lon"):             # 经纬度是小数，走单独分支
-        if k in got:
-            try:
-                cfg[k] = round(float(got[k]), 3)
-            except ValueError:
-                pass
     cfg["weekend_off"] = "weekend_off" in got
-    cfg["wx_weekday"] = "wx_weekday" in got
     # 护栏：刷新寿命按 update 命令计数，差分和全刷都记 1 次，所以间隔仍由次数决定。
     # 厂家 FAQ：非局刷产品刷新间隔建议 >= 180 秒。盘中下限放宽到 60（用户 2026-11-05 要求
     # 1 分钟，主动接受约 2x 寿命损耗）；非盘中守厂家口径 180，且不得比盘中间隔更密。
@@ -1526,19 +1306,18 @@ def _apply_cfg_form(body):
 # 保存后要善后的字段分两类：
 #   显示类：只被 draw() 读取，而 render() 按内容指纹去重——数据不变就不重画，
 #           静默期可能几小时看不到效果，用户以为「改了没生效」；
-#   取数类：只被取数函数读取，要等该页下一次 due 才拉（天气默认 30 分钟），
-#           且主循环只给当前页取数——人在行情页改城市，天气页要等翻过去才拉。
-_CFG_WATCH = ("mode", "city_label", "tz", "city", "lat", "lon", "quote_url")
-_CFG_DISP = ("mode", "city_label", "tz")                  # 只影响画法
-_CFG_LOC = (("weather", ("city", "lat", "lon")),          # 只影响天气页取数
-            ("quote", ("quote_url",)))                    # 只影响行情页取数
+#   取数类：只被取数函数读取，要等该页下一次 due 才拉，
+#           且主循环只给当前页取数。
+_CFG_WATCH = ("mode", "tz", "quote_url")
+_CFG_DISP = ("mode", "tz")                  # 只影响画法
+_CFG_LOC = (("quote", ("quote_url",)),)                    # 只影响行情页取数
 
 
 def _after_cfg_change(before):
     """配置保存后的善后：该重画的重画，该重抓的重抓。
 
-    没有这一步，mode/city_label/tz 要等下一次数据变化才上屏（静默期等于
-    「改了没反应」）；city/lat/lon/quote_url 要等该页下一个取数周期才生效。
+    没有这一步，mode/tz 要等下一次数据变化才上屏（静默期等于
+    「改了没反应」）；quote_url 要等该页下一个取数周期才生效。
     """
     disp = any(cfg.get(k) != before.get(k) for k in _CFG_DISP)
     loc = any(cfg.get(k) != before.get(k) for _, ks in _CFG_LOC for k in ks)
@@ -1619,7 +1398,7 @@ def web_once():
                 "updates": _updates, "diff_full_every": cfg["diff_full_every"],
                 "diff_count": panel.diff_count,
                 "amt": getattr(c, "amt_txt", lambda: "n/a")(),   # 顶栏成交额是不是真拿到了
-                "active": is_active(), "wx": wx_str()})
+                "active": is_active()})
         elif path == "/api/config":
             if method == "POST" and body:
                 try:
@@ -1632,10 +1411,7 @@ def web_once():
                 safe = {k: v for k, v in cfg.items() if k not in ("ssid", "pwd")}
                 resp = "application/json", json.dumps(safe)
         else:
-            if path == "/api/weather":
-                # 调试用：看板子实际抓到什么（含未来 2 小时降水数组）
-                resp = "application/json", json.dumps(PAGES[1].data or {})
-            elif "page=0" in cmd or "page=1" in cmd:
+            if "page=0" in cmd or "page=1" in cmd:
                 panel.jump(1 if "page=1" in cmd else 0)
             elif "next=1" in cmd:
                 panel.next()
@@ -1657,8 +1433,7 @@ def web_once():
                         .replace("{time}", hhmm(panel.last_ts))
                         .replace("{dtime}", hhmm(panel.cur().ts))
                         .replace("{rate}", rate_str())
-                        .replace("{mode}", mode_str())
-                        .replace("{wx}", wx_str()))
+                        .replace("{mode}", mode_str()))
         # no-store：浏览器不许缓存配置 JSON/页面，否则刷新会看到旧值
         cl.send(b"HTTP/1.0 200 OK\r\nContent-Type: " + resp[0].encode() +
                 b"\r\nCache-Control: no-store, no-cache, must-revalidate\r\n"
@@ -1702,9 +1477,7 @@ class Panel:
         self.jump(self.i + 1)
 
     def auto_page(self):
-        """当前时段自动该显示的页号：天气窗口内=天气页，其余时间=行情页"""
-        if len(PAGES) > 1 and PAGES[1].auto():
-            return 1
+        """当前自动显示的页号（只有行情页）"""
         return 0
 
     def tick(self):
@@ -1848,7 +1621,7 @@ def main():
             selftest()
         if btn_pressed():                # 静默期也响应按键（本地翻页，不取数）
             panel.next()
-        panel.tick()                     # 时段边界：天气窗口开/关时自动换页
+        panel.tick()                     # 时段边界：跨过静默/工作时段时自动换页
         fail = False
         if active:
             p = panel.cur()

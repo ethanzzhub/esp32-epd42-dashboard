@@ -24,7 +24,6 @@
 | **日经225 / 韩国KOSPI** | **新浪** `znb_NKY` / `znb_KOSPI` | 明文 HTTP，**必带 `Referer: https://finance.sina.com.cn`**。字段 [1]=点位、[3]=涨跌幅% |
 | **美股三格＝指数期货** `hf_NQ` / `hf_YM` / `hf_ES` | **新浪** `hq.sinajs.cn/list=` | 与上面同一个请求（一次拿 5 个码）。期货字段 [0]=最新、[7]=昨收，**新浪不给涨跌幅，自己算 (最新-昨收)/昨收**。腾讯只有 `hf_ES`，`hf_NQ/hf_YM` 无数据 → 三个统一走新浪 |
 | **涨跌停家数** | **同花顺** `data.10jqka.com.cn/dataapi/limit_up/` | `limit_up_pool`（涨停）/ `lower_limit_pool`（跌停），只读 `data.page.total`。`limit=1` 让响应降到 ~300 字节。HTTPS，板端单次 ~0.8s，只在交易时段调用。**东财 `getTopicDTPool` 返回 rc:206 空数据，不可用** |
-| 天气 | `t.weather.itboy.net/api/weather/city/<代码>` | 明文 HTTP。中文城市名接口已 404，**必须用数字代码**（泰安 `101120801`） |
 | 东财 | 仅兜底 | 公司网络下会被 **IP 级限流**（push2 全子域名返回 0 字节）。批量接口 `clist/get?fs=m:100` 一次给 63 个指数，注意其 NDX 是纳斯达克综合不是纳指100 |
 
 架构结论：**板子直连公网**，不要走家里聚合服务（TLS 次数一样都是 1 次，却多 4 个故障点）。`quote_url` 留空即直连。详细决策见 `dashboard/QUOTE-SOURCE.md`。
@@ -79,8 +78,7 @@
 - 刷新策略：内容真变了才刷（`show()` 做内容去重）；**刷完立刻 `epd.sleep()`**（`0x10=0x01` 进深睡撤高压），下次刷前必须重走 `epd_init()`（内部 `reset()` 唤醒），多约 230ms。
 - **分时段间隔（2026-11-03）**：`in_session()` 判 09:00-15:30 → `quote_sec`(120s)，其余工作时段 → `quote_sec_off`(600s)。`QuotePage.due()` 每次重算 ttl，跨时段立即切档。约 234 次/天（原 390），减 40% 闪屏；100 万次 ≈ 11.7 年（五折 5.9 年）。
 - 寿命护栏（厂家 FAQ）：理想 100 万次、非局刷产品**间隔 ≥180s**、**刷完要 sleep/断电否则长期高压可能烧屏**。代码护栏：`quote_sec >= 120`、`quote_sec_off >= 180` 且不小于 `quote_sec`；`full_every` 已废弃恒置 1。
-- **本地 `firmware/config.json` 与板端 `config.json` 内容不同**（城市：本地 TAIAN/101120801，板上 HAIDIAN/101010200）。改板端配置用 `tools/sh.py` 就地改 json，别整份上传覆盖。
-- 屏无中文字库 → 天气做中文→拉丁映射（晴→CLEAR 等），城市显示代号。
+- **本地 `firmware/config.json` 与板端 `config.json` 内容可能不同**。改板端配置用 `tools/sh.py` 就地改 json，别整份上传覆盖。
 - 跌的表示：`mode` = `box` 加框（默认）/ `paren` 括号 / `inv` 反白 / `plain` 无。设计上是**无符号数字 + 形态**，不用颜色。
 
 ## 本机环境
@@ -94,7 +92,7 @@
 
 - [x] 固件烧录 + PSRAM 验证
 - [x] WiFi 连通（hxq-office，板子 IP 172.16.48.206）
-- [x] 取数链路真机验证：12/12 标的 423ms、天气 176ms、屏幕时钟正确
+- [x] 取数链路真机验证：12/12 标的 423ms、屏幕时钟正确
 - [x] 屏到货 → 接线 → `epaper_main.py` 传成 `main.py` → 开机自启
 - [x] 局部刷新调研（结论：本屏没有局刷，见上）
 - [ ] 按键翻页（GPIO4）实测

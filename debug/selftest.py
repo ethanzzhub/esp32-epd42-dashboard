@@ -1,4 +1,4 @@
-# 真机自测：连 WiFi -> 对时 -> 取行情 -> 取天气（不需要屏幕）
+# 真机自测：连 WiFi -> 对时 -> 取行情（不需要屏幕）
 import time
 import network
 
@@ -49,8 +49,3 @@ def run():
         v = q.get(code)
         print("   %-13s %-8s %s" % (code, tk,
               ("%+.2f%%  %.2f" % (v[0], v[1])) if v else "-- 缺"))
-
-    t0 = time.ticks_ms()
-    w = g["weather"]()
-    ms = time.ticks_diff(time.ticks_ms(), t0)
-    print("天气 (%dms):" % ms, w)

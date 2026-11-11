@@ -12,8 +12,7 @@ DEFAULT = {
     "ssid": "",          # WiFi 名
     "pwd": "",           # WiFi 密码
     "page_ms": 30000,    # 每页停留毫秒
-    "order": ["stock", "weather", "ai"],   # 页面轮播顺序
-    "city": "泰安",       # 天气城市
+    "order": ["stock", "ai"],   # 页面轮播顺序
     "ai_url": "http://192.168.1.10:8080/brief",  # AI 简报接口
     "brightness": 80,    # 屏幕亮度 0-100
 }
@@ -51,15 +50,13 @@ button{margin-top:18px;padding:10px 18px;border:0;border-radius:6px;background:#
 <label>WiFi 名称<input name=ssid></label>
 <label>WiFi 密码<input name=pwd type=password></label>
 <label>每页停留毫秒<input name=page_ms type=number></label>
-<label>轮播顺序（逗号分隔 stock,weather,ai）<input name=order></label>
-<label>天气城市<input name=city></label>
+<label>轮播顺序（逗号分隔 stock,ai）<input name=order></label>
 <label>AI 简报接口<input name=ai_url></label>
 <label>屏幕亮度（0-100）<input name=brightness type=number></label>
 <button type=submit>保存并重启</button>
 </form>
 <div class=row>
 <button onclick=act('/api/switch?i=0')>切到股票页</button>
-<button onclick=act('/api/switch?i=1')>切到天气页</button>
 <button onclick=act('/api/switch?i=2')>切到 AI 页</button>
 </div>
 <div id=msg></div>
